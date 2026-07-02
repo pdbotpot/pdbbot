@@ -236,6 +236,39 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 				}
 				continue
 			}
+			if cmd == "!create-gc" || strings.HasPrefix(cmd, "!create-gc ") {
+				cmdIDs[m.ID] = struct{}{}
+				var replyText string
+				gcName := strings.TrimSpace(strings.TrimPrefix(m.Text, "!create-gc"))
+				if gcName == "" {
+					replyText = "usage: !create-gc <name>"
+				} else if ch.GroupChatID == "" {
+					replyText = "can't verify permissions (group id unknown)"
+				} else {
+					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+					if err != nil {
+						slog.Warn("create-gc: admin check failed", "err", err)
+						replyText = "error checking permissions"
+					} else if !ok {
+						replyText = "no permission"
+					} else if b.cfg.DryRun {
+						replyText = "[dry-run] would create gc: " + gcName
+					} else {
+						result, err := b.api.CreateGroupChat(ctx, gcName)
+						if err != nil {
+							slog.Warn("create-gc: failed", "err", err)
+							replyText = "failed to create group chat"
+						} else {
+							slog.Info("create-gc: created", "name", result.Name, "id", result.GroupChatID, "channel", result.ChannelID, "by", m.SenderName)
+							replyText = "created: " + result.Name + " (id: " + result.GroupChatID + ", channel: " + result.ChannelID + ")"
+						}
+					}
+				}
+				if _, err := QuickSend(ctx, b.api, ch.ID, replyText, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("create-gc reply failed", "err", err)
+				}
+				continue
+			}
 			if cmd == "!truth" || cmd == "!dare" {
 				cmdIDs[m.ID] = struct{}{}
 				tdReqs = append(tdReqs, tdReq{cmd[1:], m})

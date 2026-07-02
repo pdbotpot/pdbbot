@@ -253,6 +253,53 @@ func (c *Client) DeleteMessage(ctx context.Context, groupChatID, messageID strin
 	return nil
 }
 
+// CreateGroupChatResult holds the result of a group chat creation.
+type CreateGroupChatResult struct {
+	GroupChatID string // numeric ID, e.g. "52418"
+	ChannelID   string // e.g. "group-4885554-63507162"
+	Name        string
+}
+
+// CreateGroupChat creates a new public group chat with the given name.
+// Icon is omitted; the group will have no icon.
+func (c *Client) CreateGroupChat(ctx context.Context, name string) (CreateGroupChatResult, error) {
+	payload, _ := json.Marshal(map[string]string{
+		"name":          name,
+		"groupChatType": "public",
+		"languageID":    "en",
+	})
+	req, err := token.NewAPIRequest(ctx, "POST", "/group_chats", payload)
+	if err != nil {
+		return CreateGroupChatResult{}, err
+	}
+	resp, err := c.mgr.Do(ctx, req)
+	if err != nil {
+		return CreateGroupChatResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return CreateGroupChatResult{}, fmt.Errorf("create group_chat: status %d: %s", resp.StatusCode, raw)
+	}
+	var out struct {
+		Data struct {
+			GroupChat struct {
+				ID        string `json:"id"`
+				Name      string `json:"name"`
+				ChannelID string `json:"channelID"`
+			} `json:"groupChat"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return CreateGroupChatResult{}, fmt.Errorf("create group_chat decode: %w", err)
+	}
+	return CreateGroupChatResult{
+		GroupChatID: out.Data.GroupChat.ID,
+		ChannelID:   out.Data.GroupChat.ChannelID,
+		Name:        out.Data.GroupChat.Name,
+	}, nil
+}
+
 // StartTyping sends a typing-started event.
 func (c *Client) StartTyping(ctx context.Context, channelID string) error {
 	return c.typingEvent(ctx, "/im/events/start_typing", channelID)
