@@ -17,9 +17,10 @@ import (
 
 // Channel is a PDB chat channel (group or DM).
 type Channel struct {
-	ID   string
-	Type string // "group_chat" or "friend_channel"
-	Name string // group display name; empty for DMs
+	ID          string
+	Type        string // "group_chat" or "friend_channel"
+	Name        string // group display name; empty for DMs
+	GroupChatID string // numeric group chat ID, populated for group channels
 }
 
 func (c Channel) IsGroup() bool { return c.Type == "group_chat" }
@@ -72,7 +73,8 @@ func ParseChannelsJSON(r io.Reader) ([]Channel, error) {
 					ID          string `json:"id"`
 					ChannelType string `json:"channelType"`
 					ExtraData   struct {
-						Name string `json:"name"`
+						Name        string `json:"name"`
+						GroupChatID string `json:"groupChatID"`
 					} `json:"extraData"`
 				} `json:"channel"`
 			} `json:"results"`
@@ -85,9 +87,10 @@ func ParseChannelsJSON(r io.Reader) ([]Channel, error) {
 	for _, r := range out.Data.Results {
 		ch := r.Channel
 		channels = append(channels, Channel{
-			ID:   ch.ID,
-			Type: ch.ChannelType,
-			Name: strings.TrimSpace(ch.ExtraData.Name),
+			ID:          ch.ID,
+			Type:        ch.ChannelType,
+			Name:        strings.TrimSpace(ch.ExtraData.Name),
+			GroupChatID: ch.ExtraData.GroupChatID,
 		})
 	}
 	return channels, nil
@@ -191,6 +194,63 @@ func (c *Client) SendMessage(ctx context.Context, channelID, text, replyToID str
 		return "", fmt.Errorf("messages/create decode: %w", err)
 	}
 	return out.Data.ID, nil
+}
+
+// IsGroupAdmin returns true if userID has role "admin" or "mod" in the group chat.
+func (c *Client) IsGroupAdmin(ctx context.Context, groupChatID, userID string) (bool, error) {
+	req, err := token.NewAPIRequest(ctx, "GET", "/group_chats/"+groupChatID, nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.mgr.Do(ctx, req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("group_chats/%s: status %d: %s", groupChatID, resp.StatusCode, raw)
+	}
+	var out struct {
+		Data struct {
+			GroupChat struct {
+				Members []struct {
+					User struct {
+						ID string `json:"id"`
+					} `json:"user"`
+					Role string `json:"role"`
+				} `json:"members"`
+			} `json:"groupChat"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, fmt.Errorf("group_chats decode: %w", err)
+	}
+	for _, m := range out.Data.GroupChat.Members {
+		if m.User.ID == userID && (m.Role == "admin" || m.Role == "mod") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// DeleteMessage removes a message from a group chat. groupChatID is the
+// numeric ID (e.g. "52405"), not the channelID string.
+func (c *Client) DeleteMessage(ctx context.Context, groupChatID, messageID string) error {
+	path := fmt.Sprintf("/group_chats/%s/message?messageID=%s", groupChatID, messageID)
+	req, err := token.NewAPIRequest(ctx, "DELETE", path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.mgr.Do(ctx, req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("delete message: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // StartTyping sends a typing-started event.

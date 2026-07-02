@@ -23,3 +23,11 @@ var guardrailRE = regexp.MustCompile(
 func passesGuardrail(text string) bool {
 	return !guardrailRE.MatchString(text)
 }
+
+// gcInviteLinkRE matches PDB group-chat invite URLs.
+var gcInviteLinkRE = regexp.MustCompile(`personality-database\.com/join_group`)
+
+// containsGCInviteLink returns true if text contains a PDB group chat invite link.
+func containsGCInviteLink(text string) bool {
+	return gcInviteLinkRE.MatchString(text)
+}

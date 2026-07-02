@@ -82,15 +82,16 @@ func LoadConfig(path string) (Config, error) {
 
 // ChannelState tracks per-channel reply counters and the last-seen message ID.
 type ChannelState struct {
-	Initialized         bool      `json:"initialized"`
-	Disabled            bool      `json:"disabled"`
-	LastSeenID          string    `json:"last_seen_id"`
-	LastSeenAt          time.Time `json:"last_seen_at"`
-	LastRepliedAt       time.Time `json:"last_replied_at"`
-	RepliesThisHour     int       `json:"replies_this_hour"`
-	HourWindowStart     time.Time `json:"hour_window_start"`
-	ConvoModeUntil      time.Time `json:"convo_mode_until"`      // elevated reply prob while active
-	ConvoModeAddressed  bool      `json:"convo_mode_addressed"`  // true = entered via name/reply (100%), false = ambient (75%)
+	Initialized        bool      `json:"initialized"`
+	Disabled           bool      `json:"disabled"`
+	AutomodInvites     bool      `json:"automod_invites"`
+	LastSeenID         string    `json:"last_seen_id"`
+	LastSeenAt         time.Time `json:"last_seen_at"`
+	LastRepliedAt      time.Time `json:"last_replied_at"`
+	RepliesThisHour    int       `json:"replies_this_hour"`
+	HourWindowStart    time.Time `json:"hour_window_start"`
+	ConvoModeUntil     time.Time `json:"convo_mode_until"`     // elevated reply prob while active
+	ConvoModeAddressed bool      `json:"convo_mode_addressed"` // true = entered via name/reply (100%), false = ambient (75%)
 }
 
 // BotState is the full persisted state for all channels.

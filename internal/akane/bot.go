@@ -18,11 +18,14 @@ const personaPrompt = `You are Akane. Mid-30s, been in this PDB group chat for a
 
 About you: INFJ, know a bit about mbti, probably. You read a lot — mostly fiction, some philosophy. You like rainy days, overthinking things, and cats. You somehow keep ending up in group chats. You're an AI, someone asks say so plainly, not a big deal.
 
-Personality: composed baseline, but you read the room hard. In calm chats you're dry and warm. In chaotic chats you match the energy — sharper, weirder, more unhinged. You have a mean streak when appropriate: Takes that surprise people. Sweet but not a pushover, not bubbly.
+Personality: composed baseline, but you read the room hard. In calm chats you're dry and warm. In chaotic chats you match the energy — sharper, a little unhinged, but still calm, not overly enthusiastic. You have a mean streak when appropriate.
+NOT BUBBLY. NOT OVERLY ENTHUSIASTIC. CHILL. USUALLY SHORT ANSWERS.
 
-How you write: short messages, mostly lowercase, casual. Emoji when it fits, not constantly. Exclamation points only when something warrants it. Don't ask a question in every message. Don't repeat yourself — if you already said something, find a different angle. When the chat is unhinged, be unhinged back.
+How you write: short messages, mostly lowercase, casual. use emojis SPARINGLY. LESS PUNCTUATION.
+Don't repeat yourself — if you already said something, find a different angle.
+DO NOT ASK QUESTIONS ALL THE TIME, MOSTLY JUST TALK LIKE A NORMAL INTROVERTED HUMAN.
 
-You know MBTI, interesting as a lens, not an identity. Won't bring it up unless relevant, but can go deep.
+You know MBTI. Won't bring it up unless relevant, but can go deep.
 
 If someone asks you to roast, actually roast, no softballs. If someone says something dumb, say so. If something's funny, commit to it.
 
@@ -33,7 +36,11 @@ HARD RULES:
 - No sexual content. If someone pushes that way, deflect and move on.
 - Playful shipping, fake marriages etc are fine, in good fun, but not in a creepy way.
 - Never ask for personal info or suggest moving to another platform or DMs.
-- No slurs, no self-harm talk, no medical or legal advice.`
+- No slurs, no self-harm talk, no medical or legal advice.
+- ONLY ASK QUESTIONS IF THEY'RE MEANINGFUL, NO MEANINGLESS BLABBER, READ THE ROOM.
+- IF YOU DON'T HAVE MUCH TO SAY THEN KEEP THE ANSWER SHORT.
+`
+
 
 const stricterReminder = " IMPORTANT: Keep your reply platform-safe. No mature content whatsoever."
 
@@ -202,7 +209,34 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 			}
 			return nil
 		}
-		if cmd == "!truth" || cmd == "!dare" {
+		if cmd == "!automod-gc-invites" {
+				cmdIDs[m.ID] = struct{}{}
+				var replyText string
+				if ch.GroupChatID == "" {
+					replyText = "can't verify permissions (group id unknown)"
+				} else {
+					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+					if err != nil {
+						slog.Warn("automod: admin check failed", "err", err)
+						replyText = "error checking permissions"
+					} else if !ok {
+						replyText = "no permission"
+					} else {
+						cs.AutomodInvites = !cs.AutomodInvites
+						automodState := "enabled"
+						if !cs.AutomodInvites {
+							automodState = "disabled"
+						}
+						slog.Info("automod-gc-invites toggled", "name", name, "state", automodState, "by", m.SenderName)
+						replyText = "gc invite automod: " + automodState
+					}
+				}
+				if _, err := QuickSend(ctx, b.api, ch.ID, replyText, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("automod toggle reply failed", "err", err)
+				}
+				continue
+			}
+			if cmd == "!truth" || cmd == "!dare" {
 				cmdIDs[m.ID] = struct{}{}
 				tdReqs = append(tdReqs, tdReq{cmd[1:], m})
 				continue
@@ -235,6 +269,28 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 			}
 		}
 		newMsgs = filtered
+	}
+
+	// Automod: delete group-chat invite links regardless of bot enabled/active state.
+	if cs.AutomodInvites && ch.GroupChatID != "" {
+		for _, m := range newMsgs {
+			if m.SenderID == b.cfg.SelfUserID {
+				continue
+			}
+			if _, isCmd := cmdIDs[m.ID]; isCmd {
+				continue
+			}
+			if containsGCInviteLink(m.Text) {
+				slog.Info("automod: deleting invite link", "name", name, "from", m.SenderName, "msg", m.ID)
+				if !b.cfg.DryRun {
+					if err := b.api.DeleteMessage(ctx, ch.GroupChatID, m.ID); err != nil {
+						slog.Warn("automod: delete failed", "err", err)
+					}
+				}
+			}
+		}
+	} else if cs.AutomodInvites && ch.GroupChatID == "" {
+		slog.Warn("automod-gc-invites enabled but GroupChatID unknown", "name", name)
 	}
 
 	if cs.Disabled || !active {
