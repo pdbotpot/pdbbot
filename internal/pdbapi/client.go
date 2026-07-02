@@ -304,6 +304,44 @@ func (c *Client) CreateGroupChat(ctx context.Context, name, iconToken string) (C
 	}, nil
 }
 
+// CreateChat creates or retrieves the DM/request channel with targetUserID.
+// Works for both friends and non-friends (returns a request_channel for strangers).
+// Returns the channel ID to use with SendMessage.
+func (c *Client) CreateChat(ctx context.Context, targetUserID string) (string, error) {
+	payload, _ := json.Marshal(map[string]string{"targetUserID": targetUserID})
+	req, err := token.NewAPIRequest(ctx, "POST", "/chats/create", payload)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.mgr.Do(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("chats/create: status %d: %s", resp.StatusCode, raw)
+	}
+	var out struct {
+		Data struct {
+			Channel struct {
+				ID string `json:"id"`
+			} `json:"channel"`
+			ChannelID string `json:"channelID"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("chats/create decode: %w", err)
+	}
+	if out.Data.Channel.ID != "" {
+		return out.Data.Channel.ID, nil
+	}
+	if out.Data.ChannelID != "" {
+		return out.Data.ChannelID, nil
+	}
+	return "", fmt.Errorf("chats/create: no channel ID in response")
+}
+
 // StartTyping sends a typing-started event.
 func (c *Client) StartTyping(ctx context.Context, channelID string) error {
 	return c.typingEvent(ctx, "/im/events/start_typing", channelID)

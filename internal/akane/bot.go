@@ -278,15 +278,15 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 						} else {
 							slog.Info("create-gc: created", "name", result.Name, "id", result.GroupChatID, "channel", result.ChannelID, "by", m.SenderName)
 							link := "https://www.personality-database.com/join_group?cid=livestream%3A" + result.ChannelID + "&id=" + result.GroupChatID + "&inviteFrom=" + b.cfg.SelfUserID
-							dmChID := b.findDMChannel(m.SenderID)
-							if dmChID != "" && !b.cfg.DryRun {
-								if _, err := b.api.SendMessage(ctx, dmChID, link, ""); err != nil {
-									slog.Warn("create-gc: dm failed", "err", err)
-								} else {
-									replyText = "sent to your dms"
-								}
-							} else {
+							dmChID, err := b.api.CreateChat(ctx, m.SenderID)
+							if err != nil {
+								slog.Warn("create-gc: open dm failed", "err", err)
 								replyText = link
+							} else if _, err := b.api.SendMessage(ctx, dmChID, link, ""); err != nil {
+								slog.Warn("create-gc: dm send failed", "err", err)
+								replyText = link
+							} else {
+								replyText = "✨ " + m.SenderName + "'s group chat has been created, check your dms for the invite link ✨"
 							}
 						}
 					}
@@ -676,22 +676,6 @@ func (b *Bot) isActiveHours(now time.Time) bool {
 	return !local.Before(start) && !local.After(end)
 }
 
-// findDMChannel searches knownChannels for a friend_channel with targetUserID.
-// Channel IDs have format "{userA}-{userB}{8-digit-suffix}"; we match by prefix.
-func (b *Bot) findDMChannel(targetUserID string) string {
-	selfID := b.cfg.SelfUserID
-	for _, ch := range b.knownChannels {
-		if ch.Type != "friend_channel" {
-			continue
-		}
-		// Match when target is the first segment or the second segment starts with target.
-		if strings.HasPrefix(ch.ID, targetUserID+"-") ||
-			strings.HasPrefix(ch.ID, selfID+"-"+targetUserID) {
-			return ch.ID
-		}
-	}
-	return ""
-}
 
 func parseHHMM(hhmm string, ref time.Time) time.Time {
 	parts := strings.SplitN(hhmm, ":", 2)
