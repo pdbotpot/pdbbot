@@ -261,13 +261,17 @@ type CreateGroupChatResult struct {
 }
 
 // CreateGroupChat creates a new public group chat with the given name.
-// Icon is omitted; the group will have no icon.
-func (c *Client) CreateGroupChat(ctx context.Context, name string) (CreateGroupChatResult, error) {
-	payload, _ := json.Marshal(map[string]string{
+// iconToken is the base64 signed image token for the group icon; pass "" to omit.
+func (c *Client) CreateGroupChat(ctx context.Context, name, iconToken string) (CreateGroupChatResult, error) {
+	body := map[string]string{
 		"name":          name,
 		"groupChatType": "public",
 		"languageID":    "en",
-	})
+	}
+	if iconToken != "" {
+		body["icon"] = iconToken
+	}
+	payload, _ := json.Marshal(body)
 	req, err := token.NewAPIRequest(ctx, "POST", "/group_chats", payload)
 	if err != nil {
 		return CreateGroupChatResult{}, err

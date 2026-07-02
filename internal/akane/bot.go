@@ -254,7 +254,7 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 					} else if b.cfg.DryRun {
 						replyText = "[dry-run] would create gc: " + gcName
 					} else {
-						result, err := b.api.CreateGroupChat(ctx, gcName)
+						result, err := b.api.CreateGroupChat(ctx, gcName, b.cfg.DefaultGroupChatIcon)
 						if err != nil {
 							slog.Warn("create-gc: failed", "err", err)
 							replyText = "failed to create group chat"

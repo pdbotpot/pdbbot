@@ -36,6 +36,7 @@ type Config struct {
 	Providers                    map[string]LLMConfig   `json:"providers"`
 	DryRun                       bool                   `json:"dry_run"`
 	SelfUserID                   string      `json:"self_user_id"`
+	DefaultGroupChatIcon         string      `json:"default_group_chat_icon"`
 }
 
 func DefaultConfig() Config {
