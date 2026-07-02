@@ -3,6 +3,6 @@ state.json
 state.json.lock
 akane_state.json
 *.key
-akane
-apidump
-validate
+/akane
+/apidump
+/validate
