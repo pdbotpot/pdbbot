@@ -318,28 +318,24 @@ func (c *Client) CreateChat(ctx context.Context, targetUserID string) (string, e
 		return "", err
 	}
 	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("chats/create: status %d: %s", resp.StatusCode, raw)
 	}
 	var out struct {
 		Data struct {
-			Channel struct {
-				ID string `json:"id"`
-			} `json:"channel"`
-			ChannelID string `json:"channelID"`
+			ChatChannelInfo struct {
+				ChannelID string `json:"channelID"`
+			} `json:"chatChannelInfo"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return "", fmt.Errorf("chats/create decode: %w", err)
 	}
-	if out.Data.Channel.ID != "" {
-		return out.Data.Channel.ID, nil
+	if out.Data.ChatChannelInfo.ChannelID != "" {
+		return out.Data.ChatChannelInfo.ChannelID, nil
 	}
-	if out.Data.ChannelID != "" {
-		return out.Data.ChannelID, nil
-	}
-	return "", fmt.Errorf("chats/create: no channel ID in response")
+	return "", fmt.Errorf("chats/create: no channel ID in response: %s", raw)
 }
 
 // StartTyping sends a typing-started event.
