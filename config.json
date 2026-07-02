@@ -1,0 +1,28 @@
+{
+  "poll_interval_sec": 5,
+  "trigger_names": ["akane", "akana"],
+  "ambient_prob": 0.40,
+  "per_channel_cooldown_sec": 5,
+  "max_replies_per_channel_per_hour": 200,
+  "max_replies_global_per_hour": 500,
+  "history_len": 35,
+  "convo_mode_minutes": 4,
+  "convo_mode_ambient_minutes": 1,
+  "active_hours": {"tz": "Europe/Tallinn", "start": "10:00", "end": "00:30"},
+  "providers": {
+    "groq": {
+      "base_url": "https://api.groq.com/openai/v1",
+      "model": "openai/gpt-oss-20b"
+    },
+    "openai": {
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini"
+    }
+  },
+  "idle_after_sec": 300,
+  "idle_poll_interval_sec": 30,
+  "deep_idle_after_sec": 900,
+  "deep_idle_poll_interval_sec": 90,
+  "dry_run": false,
+  "self_user_id": "4885554"
+}
