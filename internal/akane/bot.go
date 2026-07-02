@@ -56,8 +56,9 @@ type Bot struct {
 		count       int
 		windowStart time.Time
 	}
-	lastActivityAt time.Time // last time any channel had new messages
-	idleTier       int       // 0=active, 1=quiet, 2=deep quiet
+	lastActivityAt  time.Time // last time any channel had new messages
+	idleTier        int       // 0=active, 1=quiet, 2=deep quiet
+	cachedIconToken string    // uploaded once, reused for !create-gc
 }
 
 func NewBot(cfg Config, api *pdbapi.Client, llmClient *llm.Client, statePath string) (*Bot, error) {
@@ -254,7 +255,21 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 					} else if b.cfg.DryRun {
 						replyText = "[dry-run] would create gc: " + gcName
 					} else {
-						result, err := b.api.CreateGroupChat(ctx, gcName, b.cfg.DefaultGroupChatIcon)
+						iconToken := b.cfg.DefaultGroupChatIcon
+						if iconToken == "" {
+							iconToken = b.cachedIconToken
+						}
+						if iconToken == "" {
+							slog.Info("create-gc: uploading default icon")
+							t, err := b.api.UploadGroupChatIcon(ctx)
+							if err != nil {
+								slog.Warn("create-gc: icon upload failed", "err", err)
+							} else {
+								b.cachedIconToken = t
+								iconToken = t
+							}
+						}
+						result, err := b.api.CreateGroupChat(ctx, gcName, iconToken)
 						if err != nil {
 							slog.Warn("create-gc: failed", "err", err)
 							replyText = "failed to create group chat"
