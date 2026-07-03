@@ -8,8 +8,9 @@ import (
 )
 
 type LLMConfig struct {
-	BaseURL string `json:"base_url"`
-	Model   string `json:"model"`
+	BaseURL        string   `json:"base_url"`
+	Model          string   `json:"model"`
+	FallbackModels []string `json:"fallback_models,omitempty"`
 }
 
 type ActiveHours struct {

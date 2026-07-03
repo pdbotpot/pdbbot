@@ -47,7 +47,7 @@ func main() {
 		slog.Error("api key load", "file", keyFile, "err", err)
 		os.Exit(1)
 	}
-	apiKey := strings.TrimSpace(string(keyBytes))
+	apiKey := strings.TrimSpace(strings.TrimPrefix(string(keyBytes), "\xef\xbb\xbf"))
 
 	mgr, err := token.Load(*statePath, nil)
 	if err != nil {
@@ -57,7 +57,7 @@ func main() {
 	defer mgr.Close()
 
 	apiClient := pdbapi.New(mgr)
-	llmClient := llm.New(providerCfg.BaseURL, providerCfg.Model, apiKey, "")
+	llmClient := llm.New(providerCfg.BaseURL, providerCfg.Model, apiKey, "", providerCfg.FallbackModels...)
 
 	bot, err := akane.NewBot(cfg, apiClient, llmClient, *botStatePath)
 	if err != nil {
