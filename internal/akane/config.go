@@ -89,6 +89,11 @@ type ChannelState struct {
 	ModsOnly           bool      `json:"mods_only"`
 	AutoDeleteEvents   bool      `json:"auto_delete_events"`
 	ModLocked          bool      `json:"mod_locked"` // only a mod/admin can re-enable
+	GCLinksOnly        bool      `json:"gc_links_only"`
+	NoDuplicates       bool      `json:"no_duplicates"`
+	AntiFlood          bool           `json:"anti_flood"`
+	AntiFloodMax       int            `json:"anti_flood_max"`                  // 0 means use default (3)
+	FloodedTexts       map[string]int `json:"flooded_texts,omitempty"`         // "userID\ttext" → stale poll count
 	LastSeenID         string    `json:"last_seen_id"`
 	LastSeenAt         time.Time `json:"last_seen_at"`
 	LastRepliedAt      time.Time `json:"last_replied_at"`

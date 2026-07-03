@@ -205,34 +205,6 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 	cs.LastSeenAt = newest.CreatedAt
 	slog.Info("new messages", "name", name, "count", len(newMsgs), "latest", fmt.Sprintf("%s: %s", newest.SenderName, newest.Text))
 
-	// Mod-locked: only scan for !akane-enable from a mod/admin; ignore everything else.
-	if cs.ModLocked {
-		for _, m := range newMsgs {
-			if m.SenderID == b.cfg.SelfUserID || m.IsEvent() {
-				continue
-			}
-			if strings.TrimSpace(strings.ToLower(m.Text)) != "!akane-enable" {
-				continue
-			}
-			if ch.GroupChatID == "" {
-				continue
-			}
-			ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
-			if err != nil || !ok {
-				continue
-			}
-			cs.ModLocked = false
-			slog.Info("mod-lock lifted", "name", name, "by", m.SenderName)
-			if _, err := QuickSend(ctx, b.api, ch.ID, "i'm back.", m.ID, b.rng, b.cfg.DryRun); err != nil {
-				slog.Warn("akane-enable reply failed", "err", err)
-			}
-			break
-		}
-		if cs.ModLocked {
-			return nil
-		}
-	}
-
 	// Pending ownership transfer: fire when the requester sends their first message
 	// (which also joins them to the GC). Transfer then clear the pending entry.
 	if ch.GroupChatID != "" {
@@ -298,7 +270,30 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 			}
 			return nil
 		}
-		if cmd == "!akanestop" || cmd == "!stopakane" {
+		if cmd == "!akane-enable" {
+			cmdIDs[m.ID] = struct{}{}
+			if cs.ModLocked {
+				if ch.GroupChatID != "" {
+					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+					if err == nil && ok {
+						cs.ModLocked = false
+						slog.Info("mod-lock lifted", "name", name, "by", m.SenderName)
+						if _, err := QuickSend(ctx, b.api, ch.ID, "i'm back.", m.ID, b.rng, b.cfg.DryRun); err != nil {
+							slog.Warn("akane-enable reply failed", "err", err)
+						}
+					}
+				}
+			} else if cs.Disabled {
+				cs.Disabled = false
+				slog.Info("channel enabled by command", "name", name, "by", m.SenderName)
+				reply := startReplies[b.rng.Intn(len(startReplies))]
+				if _, err := QuickSend(ctx, b.api, ch.ID, reply, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("send start reply failed", "err", err)
+				}
+			}
+			continue
+		}
+		if cmd == "!akanestop" || cmd == "!stopakane" || cmd == "!akane stop" {
 			cmdIDs[m.ID] = struct{}{}
 			if !cs.Disabled {
 				cs.Disabled = true
@@ -308,7 +303,7 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 					slog.Warn("send stop reply failed", "err", err)
 				}
 			}
-			return nil
+			continue
 		}
 		if cmd == "!automod-gc-invites" {
 				cmdIDs[m.ID] = struct{}{}
@@ -334,6 +329,99 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 				}
 				if _, err := QuickSend(ctx, b.api, ch.ID, replyText, m.ID, b.rng, b.cfg.DryRun); err != nil {
 					slog.Warn("automod toggle reply failed", "err", err)
+				}
+				continue
+			}
+			if cmd == "!no-duplicates" {
+				cmdIDs[m.ID] = struct{}{}
+				var replyText string
+				if ch.GroupChatID == "" {
+					replyText = "can't verify permissions (group id unknown)"
+				} else {
+					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+					if err != nil {
+						slog.Warn("no-duplicates: admin check failed", "err", err)
+						replyText = "error checking permissions"
+					} else if !ok {
+						replyText = "no permission"
+					} else {
+						cs.NoDuplicates = !cs.NoDuplicates
+						state := "enabled"
+						if !cs.NoDuplicates {
+							state = "disabled"
+						}
+						slog.Info("no-duplicates toggled", "name", name, "state", state, "by", m.SenderName)
+						replyText = "no-duplicates: " + state
+					}
+				}
+				if _, err := QuickSend(ctx, b.api, ch.ID, replyText, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("no-duplicates reply failed", "err", err)
+				}
+				continue
+			}
+			if cmd == "!anti-flood" || strings.HasPrefix(cmd, "!anti-flood ") {
+				cmdIDs[m.ID] = struct{}{}
+				var replyText string
+				if ch.GroupChatID == "" {
+					replyText = "can't verify permissions (group id unknown)"
+				} else {
+					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+					if err != nil {
+						slog.Warn("anti-flood: admin check failed", "err", err)
+						replyText = "error checking permissions"
+					} else if !ok {
+						replyText = "no permission"
+					} else {
+						arg := strings.TrimSpace(strings.TrimPrefix(cmd, "!anti-flood"))
+						if n, err := strconv.Atoi(arg); err == nil && n > 0 {
+							cs.AntiFloodMax = n
+							cs.AntiFlood = true
+							slog.Info("anti-flood set", "name", name, "max", n, "by", m.SenderName)
+							replyText = fmt.Sprintf("anti-flood: enabled (max %d identical per cycle)", n)
+						} else {
+							cs.AntiFlood = !cs.AntiFlood
+							state := "enabled"
+							if !cs.AntiFlood {
+								state = "disabled"
+							}
+							max := cs.AntiFloodMax
+							if max == 0 {
+								max = 3
+							}
+							slog.Info("anti-flood toggled", "name", name, "state", state, "max", max, "by", m.SenderName)
+							replyText = fmt.Sprintf("anti-flood: %s (max %d identical per cycle)", state, max)
+						}
+					}
+				}
+				if _, err := QuickSend(ctx, b.api, ch.ID, replyText, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("anti-flood reply failed", "err", err)
+				}
+				continue
+			}
+			if cmd == "!gc-links-only" {
+				cmdIDs[m.ID] = struct{}{}
+				var replyText string
+				if ch.GroupChatID == "" {
+					replyText = "can't verify permissions (group id unknown)"
+				} else {
+					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+					if err != nil {
+						slog.Warn("gc-links-only: admin check failed", "err", err)
+						replyText = "error checking permissions"
+					} else if !ok {
+						replyText = "no permission"
+					} else {
+						cs.GCLinksOnly = !cs.GCLinksOnly
+						state := "enabled"
+						if !cs.GCLinksOnly {
+							state = "disabled"
+						}
+						slog.Info("gc-links-only toggled", "name", name, "state", state, "by", m.SenderName)
+						replyText = "gc links only mode: " + state
+					}
+				}
+				if _, err := QuickSend(ctx, b.api, ch.ID, replyText, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("gc-links-only reply failed", "err", err)
 				}
 				continue
 			}
@@ -482,6 +570,42 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 				}
 				continue
 			}
+			if cmd == "!server-conf" {
+				cmdIDs[m.ID] = struct{}{}
+				on := func(b bool) string {
+					if b {
+						return "on"
+					}
+					return "off"
+				}
+				floodMax := cs.AntiFloodMax
+				if floodMax == 0 {
+					floodMax = 3
+				}
+				lines := []string{
+					"server config:",
+					"akane: " + func() string {
+						if cs.ModLocked {
+							return "mod-locked"
+						}
+						if cs.Disabled {
+							return "disabled"
+						}
+						return "enabled"
+					}(),
+					"automod-gc-invites: " + on(cs.AutomodInvites),
+					"auto-delete-events: " + on(cs.AutoDeleteEvents),
+					"mods-only-chat-mode: " + on(cs.ModsOnly),
+					"gc-links-only: " + on(cs.GCLinksOnly),
+					"no-duplicates: " + on(cs.NoDuplicates),
+					fmt.Sprintf("anti-flood: %s (max %d)", on(cs.AntiFlood), floodMax),
+				}
+				reply := strings.Join(lines, "\n")
+				if _, err := QuickSend(ctx, b.api, ch.ID, reply, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("server-conf reply failed", "err", err)
+				}
+				continue
+			}
 			if cmd == "!truth" || cmd == "!dare" {
 				cmdIDs[m.ID] = struct{}{}
 				tdReqs = append(tdReqs, tdReq{cmd[1:], m})
@@ -491,8 +615,7 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 		for _, pfx := range startPrefixes {
 			if cmd == pfx || strings.HasPrefix(cmd, pfx+" ") {
 				if cs.Disabled {
-					cs.Disabled = false
-					slog.Info("channel enabled by command", "name", name, "by", m.SenderName)
+					break // ignored while disabled; use !akane-enable
 				}
 				if cmd == pfx {
 					// Bare command — consume it and send quick reply.
@@ -527,7 +650,7 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 				continue
 			}
 			if containsGCInviteLink(m.Text) {
-				slog.Info("automod: deleting invite link", "name", name, "from", m.SenderName, "msg", m.ID)
+				slog.Info("automod: deleting invite link", "name", name, "from", m.SenderName, "msg", m.ID, "text", truncLog(m.Text))
 				if !b.cfg.DryRun {
 					if err := b.api.DeleteMessage(ctx, ch.GroupChatID, m.ID); err != nil {
 						slog.Warn("automod: delete failed", "err", err)
@@ -539,27 +662,61 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 		slog.Warn("automod-gc-invites enabled but GroupChatID unknown", "name", name)
 	}
 
+	// Fetch admin IDs once if any mode that needs them is active.
+	var adminIDs map[string]bool
+	if ch.GroupChatID != "" && (cs.GCLinksOnly || cs.ModsOnly || cs.NoDuplicates || cs.AntiFlood) {
+		ids, err := b.api.GetAdminIDs(ctx, ch.GroupChatID)
+		if err != nil {
+			slog.Warn("failed to fetch admin IDs", "name", name, "err", err)
+		} else {
+			adminIDs = ids
+		}
+	}
+
+	if cs.GCLinksOnly && ch.GroupChatID != "" {
+		slog.Info("gc-links-only: active", "name", name, "checking", len(newMsgs), "msgs")
+		for _, m := range newMsgs {
+			if m.SenderID == b.cfg.SelfUserID || m.IsEvent() {
+				continue
+			}
+			if _, isCmd := cmdIDs[m.ID]; isCmd {
+				continue
+			}
+			if adminIDs[m.SenderID] {
+				slog.Info("gc-links-only: skipping mod/admin", "name", name, "from", m.SenderName, "msg", m.ID)
+				continue
+			}
+			if !containsGCInviteLink(m.Text) {
+				slog.Info("gc-links-only: deleting non-link message", "name", name, "from", m.SenderName, "msg", m.ID, "text", truncLog(m.Text))
+				if !b.cfg.DryRun {
+					if err := b.api.DeleteMessage(ctx, ch.GroupChatID, m.ID); err != nil {
+						slog.Warn("gc-links-only: delete failed", "err", err)
+					}
+				}
+			}
+		}
+	} else if cs.GCLinksOnly && ch.GroupChatID == "" {
+		slog.Warn("gc-links-only enabled but GroupChatID unknown", "name", name)
+	}
+
 	if cs.AutoDeleteEvents && ch.GroupChatID != "" {
 		for _, m := range newMsgs {
 			if !m.IsEvent() {
 				continue
 			}
-			slog.Info("hide-events: deleting event message", "name", name, "msg", m.ID)
+			slog.Info("auto-delete-events: deleting event message", "name", name, "type", m.MessageType, "msg", m.ID, "text", truncLog(m.Text))
 			if !b.cfg.DryRun {
 				if err := b.api.DeleteMessage(ctx, ch.GroupChatID, m.ID); err != nil {
-					slog.Warn("hide-events: delete failed", "err", err)
+					slog.Warn("auto-delete-events: delete failed", "err", err)
 				}
 			}
 		}
 	} else if cs.AutoDeleteEvents && ch.GroupChatID == "" {
-		slog.Warn("hide-events enabled but GroupChatID unknown", "name", name)
+		slog.Warn("auto-delete-events enabled but GroupChatID unknown", "name", name)
 	}
 
 	if cs.ModsOnly && ch.GroupChatID != "" {
-		adminIDs, err := b.api.GetAdminIDs(ctx, ch.GroupChatID)
-		if err != nil {
-			slog.Warn("mods-only: failed to fetch admin IDs", "name", name, "err", err)
-		} else {
+		if adminIDs != nil {
 			for _, m := range newMsgs {
 				if m.SenderID == b.cfg.SelfUserID || m.IsEvent() {
 					continue
@@ -568,7 +725,7 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 					continue
 				}
 				if !adminIDs[m.SenderID] {
-					slog.Info("mods-only: deleting non-mod message", "name", name, "from", m.SenderName, "msg", m.ID)
+					slog.Info("mods-only: deleting non-mod message", "name", name, "from", m.SenderName, "msg", m.ID, "text", truncLog(m.Text))
 					if !b.cfg.DryRun {
 						if err := b.api.DeleteMessage(ctx, ch.GroupChatID, m.ID); err != nil {
 							slog.Warn("mods-only: delete failed", "err", err)
@@ -581,7 +738,121 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 		slog.Warn("mods-only enabled but GroupChatID unknown", "name", name)
 	}
 
-	if cs.Disabled || !active {
+	if cs.NoDuplicates && ch.GroupChatID != "" {
+		// Build set of texts already seen in the fetched history (non-new messages).
+		seenTexts := make(map[string]struct{})
+		newIDs := make(map[string]struct{}, len(newMsgs))
+		for _, m := range newMsgs {
+			newIDs[m.ID] = struct{}{}
+		}
+		for _, m := range allMsgs {
+			if _, isNew := newIDs[m.ID]; !isNew {
+				seenTexts[strings.ToLower(strings.TrimSpace(m.Text))] = struct{}{}
+			}
+		}
+		for _, m := range newMsgs {
+			if m.SenderID == b.cfg.SelfUserID || m.IsEvent() {
+				continue
+			}
+			if _, isCmd := cmdIDs[m.ID]; isCmd {
+				continue
+			}
+			if adminIDs[m.SenderID] {
+				continue
+			}
+			key := strings.ToLower(strings.TrimSpace(m.Text))
+			if key == "" {
+				continue
+			}
+			if _, dup := seenTexts[key]; dup {
+				slog.Info("no-duplicates: deleting duplicate", "name", name, "from", m.SenderName, "msg", m.ID, "text", truncLog(m.Text))
+				if !b.cfg.DryRun {
+					if err := b.api.DeleteMessage(ctx, ch.GroupChatID, m.ID); err != nil {
+						slog.Warn("no-duplicates: delete failed", "err", err)
+					}
+				}
+			} else {
+				seenTexts[key] = struct{}{}
+			}
+		}
+	}
+
+	if cs.AntiFlood && ch.GroupChatID != "" {
+		floodMax := cs.AntiFloodMax
+		if floodMax == 0 {
+			floodMax = 3
+		}
+		if cs.FloodedTexts == nil {
+			cs.FloodedTexts = make(map[string]int)
+		}
+
+		// Group candidate messages by (userID, text), preserving order.
+		type userTextKey struct{ user, text string }
+		msgsByKey := make(map[userTextKey][]string) // → ordered message IDs
+		for _, m := range newMsgs {
+			if m.SenderID == b.cfg.SelfUserID || m.IsEvent() {
+				continue
+			}
+			if _, isCmd := cmdIDs[m.ID]; isCmd {
+				continue
+			}
+			if adminIDs[m.SenderID] {
+				continue
+			}
+			tk := strings.ToLower(strings.TrimSpace(m.Text))
+			if tk == "" {
+				continue
+			}
+			k := userTextKey{m.SenderID, tk}
+			msgsByKey[k] = append(msgsByKey[k], m.ID)
+		}
+
+		toDelete := make(map[string]struct{})
+		seenThisPoll := make(map[string]struct{})
+
+		for k, ids := range msgsByKey {
+			floodKey := k.user + "\t" + k.text
+			if _, remembered := cs.FloodedTexts[floodKey]; remembered {
+				// Known flood text — delete ALL occurrences, reset stale counter.
+				seenThisPoll[floodKey] = struct{}{}
+				cs.FloodedTexts[floodKey] = 0
+				for _, id := range ids {
+					toDelete[id] = struct{}{}
+				}
+			} else if len(ids) > floodMax {
+				// New flood — keep first, delete the rest, start remembering.
+				seenThisPoll[floodKey] = struct{}{}
+				cs.FloodedTexts[floodKey] = 0
+				for _, id := range ids[1:] {
+					toDelete[id] = struct{}{}
+				}
+			}
+		}
+
+		// Age flood memory; forget after 3 polls without seeing the text.
+		for key := range cs.FloodedTexts {
+			if _, seen := seenThisPoll[key]; seen {
+				continue
+			}
+			cs.FloodedTexts[key]++
+			if cs.FloodedTexts[key] >= 3 {
+				delete(cs.FloodedTexts, key)
+			}
+		}
+
+		for _, m := range newMsgs {
+			if _, del := toDelete[m.ID]; del {
+				slog.Info("anti-flood: deleting", "name", name, "from", m.SenderName, "msg", m.ID, "text", truncLog(m.Text))
+				if !b.cfg.DryRun {
+					if err := b.api.DeleteMessage(ctx, ch.GroupChatID, m.ID); err != nil {
+						slog.Warn("anti-flood: delete failed", "err", err)
+					}
+				}
+			}
+		}
+	}
+
+	if cs.Disabled || cs.ModLocked || !active {
 		return nil
 	}
 
@@ -904,6 +1175,15 @@ func (b *Bot) isActiveHours(now time.Time) bool {
 	return !local.Before(start) && !local.After(end)
 }
 
+
+func truncLog(s string) string {
+	const max = 80
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
 
 func parseHHMM(hhmm string, ref time.Time) time.Time {
 	parts := strings.SplitN(hhmm, ":", 2)
