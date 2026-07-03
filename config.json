@@ -12,7 +12,8 @@
   "providers": {
     "groq": {
       "base_url": "https://api.groq.com/openai/v1",
-      "model": "openai/gpt-oss-20b"
+      "model": "llama-3.3-70b-versatile",
+      "fallback_models": ["openai/gpt-oss-20b", "meta-llama/llama-4-scout-17b-16e-instruct", "qwen/qwen3-32b", "groq/compound-mini"]
     },
     "openai": {
       "base_url": "https://api.openai.com/v1",
@@ -24,5 +25,6 @@
   "deep_idle_after_sec": 900,
   "deep_idle_poll_interval_sec": 90,
   "dry_run": false,
-  "self_user_id": "4885554"
+  "self_user_id": "4885554",
+  "default_group_chat_icon": "eyJwYXlsb2FkIjoie1wiYnVja2V0XCI6XCJwZGItZ2VuZXJhbC1pbWFnZXMtcHJvZFwiLFwiaXNHaXBoeVwiOmZhbHNlLFwia2V5XCI6XCJnZW5lcmFsX2ltYWdlcy80ODg1NTU0LzViMTQwYjA2LWMwYjctNDc3ZC04YzNmLTVmNzM5NTQ0ZjU1MS5qcGVnXCIsXCJyZWdpb25cIjpcInVzLWVhc3QtMVwiLFwidGltZXN0YW1wXCI6XCIxNzgzMDI4MjI0XCIsXCJ1c2VySURcIjpcIjQ4ODU1NTRcIixcInZlcnNpb25cIjpcInBkYkBnZW5lcmFsQHYxXCIsXCJvcmlnaW5cIjp7XCJ1cmxcIjpcImh0dHBzOi8vc3RhdGljMS5wZXJzb25hbGl0eS1kYXRhYmFzZS5jb20vZ2VuZXJhbF9pbWFnZXMvNDg4NTU1NC81YjE0MGIwNi1jMGI3LTQ3N2QtOGMzZi01ZjczOTU0NGY1NTEuanBlZ1wiLFwiY29udGVudFR5cGVcIjpcImltYWdlL2pwZWdcIixcIndpZHRoXCI6MjY3LFwiaGVpZ2h0XCI6MjY3LFwicmVnaW9uXCI6XCJ1cy1lYXN0LTFcIixcImJ1Y2tldFwiOlwicGRiLWdlbmVyYWwtaW1hZ2VzLXByb2RcIixcImtleVwiOlwiZ2VuZXJhbF9pbWFnZXMvNDg4NTU1NC81YjE0MGIwNi1jMGI3LTQ3N2QtOGMzZi01ZjczOTU0NGY1NTEuanBlZ1wifSxcInNpemVzXCI6e1wic21hbGxcIjp7XCJ1cmxcIjpcImh0dHBzOi8vc3RhdGljMS5wZXJzb25hbGl0eS1kYXRhYmFzZS5jb20vZ2VuZXJhbF9pbWFnZXMvNDg4NTU1NC81YjE0MGIwNi1jMGI3LTQ3N2QtOGMzZi01ZjczOTU0NGY1NTFfc21hbGwuanBlZ1wiLFwiY29udGVudFR5cGVcIjpcImltYWdlL2pwZWdcIixcIndpZHRoXCI6MjEzLFwiaGVpZ2h0XCI6MjEzLFwicmVnaW9uXCI6XCJ1cy1lYXN0LTFcIixcImJ1Y2tldFwiOlwicGRiLWdlbmVyYWwtaW1hZ2VzLXByb2RcIixcImtleVwiOlwiZ2VuZXJhbF9pbWFnZXMvNDg4NTU1NC81YjE0MGIwNi1jMGI3LTQ3N2QtOGMzZi01ZjczOTU0NGY1NTFfc21hbGwuanBlZ1wifX19Iiwic2lnIjp7InZlcnNpb24iOiJ2MCIsInNpZ24iOiJhZjMxNmIzMTU3NmYwMTBjYzhkNTI2YmJlMjAzNDI0ZDEyY2UxNTU0MjA2NjQxNmU0NTAwZWRhNTg4N2RlMzJmIn19"
 }

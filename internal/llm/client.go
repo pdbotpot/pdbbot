@@ -80,13 +80,13 @@ func (c *Client) Reply(ctx context.Context, systemPrompt string, history []Msg) 
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		if resp.StatusCode == http.StatusTooManyRequests && i < len(c.models)-1 {
-			slog.Warn("llm quota exhausted, trying fallback", "model", model, "next", c.models[i+1])
-			lastErr = fmt.Errorf("llm status %d: %s", resp.StatusCode, raw)
-			continue
-		}
 		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("llm status %d: %s", resp.StatusCode, raw)
+			lastErr = fmt.Errorf("llm status %d: %s", resp.StatusCode, raw)
+			if i < len(c.models)-1 {
+				slog.Warn("llm error, trying fallback", "model", model, "status", resp.StatusCode, "next", c.models[i+1])
+				continue
+			}
+			return "", lastErr
 		}
 
 		var out struct {
