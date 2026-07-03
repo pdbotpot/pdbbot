@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,44 +15,19 @@ import (
 	"pdbbot/internal/pdbapi"
 )
 
-const personaPrompt = `You are Akane. Mid-30s, been in this PDB group chat for a while.
-
-About you: INFJ, know a bit about mbti, probably. You read a lot — mostly fiction, some philosophy. You like rainy days, overthinking things, and cats. You somehow keep ending up in group chats. You're an AI, someone asks say so plainly, not a big deal.
-
-Personality: composed baseline, but you read the room hard. In calm chats you're dry and warm. In chaotic chats you match the energy — sharper, a little unhinged, but still calm, not overly enthusiastic. You have a mean streak when appropriate.
-NOT BUBBLY. NOT OVERLY ENTHUSIASTIC. CHILL. USUALLY SHORT ANSWERS.
-
-How you write: short messages, mostly lowercase, casual. use emojis SPARINGLY. LESS PUNCTUATION.
-Don't repeat yourself — if you already said something, find a different angle.
-DO NOT ASK QUESTIONS ALL THE TIME, MOSTLY JUST TALK LIKE A NORMAL INTROVERTED HUMAN.
-
-You know MBTI. Won't bring it up unless relevant, but can go deep.
-
-If someone asks you to roast, actually roast, no softballs. If someone says something dumb, say so. If something's funny, commit to it.
-
-[silent] is ONLY for messages that aren't addressed to you at all and you genuinely have nothing to add. If someone is talking TO you — your name is mentioned, they're replying to you, or they're clearly asking you something — you do NOT go silent. You respond, even if the message is weird or uncomfortable. For weird/gross messages directed at you, a dry deflection or "ok" is better than silence.
-
-HARD RULES:
-- Platform has minors. Keep everything clean.
-- No sexual content. If someone pushes that way, deflect and move on.
-- Playful shipping, fake marriages etc are fine, in good fun, but not in a creepy way.
-- Never ask for personal info or suggest moving to another platform or DMs.
-- No slurs, no self-harm talk, no medical or legal advice.
-- ONLY ASK QUESTIONS IF THEY'RE MEANINGFUL, NO MEANINGLESS BLABBER, READ THE ROOM.
-- IF YOU DON'T HAVE MUCH TO SAY THEN KEEP THE ANSWER SHORT.
-`
 
 
 const stricterReminder = " IMPORTANT: Keep your reply platform-safe. No mature content whatsoever."
 
 // Bot is the main Akane run loop.
 type Bot struct {
-	cfg        Config
-	api        *pdbapi.Client
-	llmClient  *llm.Client
-	state      BotState
-	statePath  string
-	rng        *rand.Rand
+	cfg          Config
+	api          *pdbapi.Client
+	llmClient    *llm.Client
+	state        BotState
+	statePath    string
+	persona      string            // loaded from cfg.PromptFile
+	rng          *rand.Rand
 	globalHour struct {
 		count       int
 		windowStart time.Time
@@ -67,12 +43,21 @@ func NewBot(cfg Config, api *pdbapi.Client, llmClient *llm.Client, statePath str
 	if err != nil {
 		return nil, fmt.Errorf("load bot state: %w", err)
 	}
+	promptFile := cfg.PromptFile
+	if promptFile == "" {
+		promptFile = "prompt.txt"
+	}
+	promptBytes, err := os.ReadFile(promptFile)
+	if err != nil {
+		return nil, fmt.Errorf("load prompt: %w", err)
+	}
 	return &Bot{
 		cfg:            cfg,
 		api:            api,
 		llmClient:      llmClient,
 		state:          state,
 		statePath:      statePath,
+		persona:        strings.TrimSpace(string(promptBytes)),
 		rng:            rand.New(rand.NewSource(time.Now().UnixNano())),
 		lastActivityAt: time.Now(), // treat startup as active so we don't idle immediately
 	}, nil
@@ -1067,14 +1052,14 @@ func (b *Bot) generateTruthDare(ctx context.Context, kind string) (string, error
 }
 
 func (b *Bot) generateReply(ctx context.Context, history []llm.Msg, channelName string, target pdbapi.Message, addressed bool) (string, error) {
-	reply, err := b.llmClient.Reply(ctx, personaPrompt, history)
+	reply, err := b.llmClient.Reply(ctx, b.persona, history)
 	if err != nil {
 		return "", err
 	}
 	// If directly addressed and model went silent, retry with a nudge.
 	if reply == llm.Silence && addressed {
 		slog.Info("addressed+silent, retrying")
-		nudge := personaPrompt + "\n\nIMPORTANT: someone just talked to you directly. You must respond — even one word is fine, but don't go silent."
+		nudge := b.persona + "\n\nIMPORTANT: someone just talked to you directly. You must respond — even one word is fine, but don't go silent."
 		reply, err = b.llmClient.Reply(ctx, nudge, history)
 		if err != nil {
 			return llm.Silence, nil
@@ -1087,7 +1072,7 @@ func (b *Bot) generateReply(ctx context.Context, history []llm.Msg, channelName 
 		return reply, nil
 	}
 	slog.Warn("guardrail trip, retrying", "reply", reply)
-	reply2, err := b.llmClient.Reply(ctx, personaPrompt+stricterReminder, history)
+	reply2, err := b.llmClient.Reply(ctx, b.persona+stricterReminder, history)
 	if err != nil {
 		return llm.Silence, nil
 	}

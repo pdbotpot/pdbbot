@@ -38,6 +38,7 @@ type Config struct {
 	DryRun                       bool                   `json:"dry_run"`
 	SelfUserID                   string      `json:"self_user_id"`
 	DefaultGroupChatIcon         string      `json:"default_group_chat_icon"`
+	PromptFile                   string      `json:"prompt_file"` // path to persona prompt; defaults to "prompt.txt"
 }
 
 func DefaultConfig() Config {
