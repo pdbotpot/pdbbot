@@ -78,8 +78,8 @@ Copy these to the server:
   "providers": {
     "groq": {
       "base_url": "https://api.groq.com/openai/v1",
-      "model": "openai/gpt-oss-20b",
-      "fallback_models": ["llama-3.3-70b-versatile"]
+      "model": "llama-3.3-70b-versatile",
+      "fallback_models": ["openai/gpt-oss-20b"]
     },
     "openai": {
       "base_url": "https://api.openai.com/v1",
