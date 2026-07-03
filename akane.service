@@ -1,0 +1,14 @@
+[Unit]
+Description=Akane PDB bot
+After=network.target
+
+[Service]
+Type=simple
+User=kalsarik
+WorkingDirectory=/home/kalsarik/pdbot
+ExecStart=/home/kalsarik/pdbot/akane -state state.json -config config.json -bot-state akane_state.json
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
