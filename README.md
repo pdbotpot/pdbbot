@@ -26,6 +26,8 @@ PDB group chat bot. Watches group chats and responds as Akane.
 
 3. Set your PDB user ID in `config.json` (`self_user_id`).
 
+4. Create `prompt.txt` with the persona prompt. Path can be overridden with `"prompt_file"` in config.json.
+
 ## Run
 
 ```sh
