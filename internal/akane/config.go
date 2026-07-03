@@ -86,6 +86,9 @@ type ChannelState struct {
 	Initialized        bool      `json:"initialized"`
 	Disabled           bool      `json:"disabled"`
 	AutomodInvites     bool      `json:"automod_invites"`
+	ModsOnly           bool      `json:"mods_only"`
+	AutoDeleteEvents   bool      `json:"auto_delete_events"`
+	ModLocked          bool      `json:"mod_locked"` // only a mod/admin can re-enable
 	LastSeenID         string    `json:"last_seen_id"`
 	LastSeenAt         time.Time `json:"last_seen_at"`
 	LastRepliedAt      time.Time `json:"last_replied_at"`
@@ -97,11 +100,15 @@ type ChannelState struct {
 
 // BotState is the full persisted state for all channels.
 type BotState struct {
-	Channels map[string]*ChannelState `json:"channels"`
+	Channels         map[string]*ChannelState `json:"channels"`
+	PendingTransfers map[string]string        `json:"pending_transfers,omitempty"` // groupChatID → requesterUserID
 }
 
 func NewBotState() BotState {
-	return BotState{Channels: make(map[string]*ChannelState)}
+	return BotState{
+		Channels:         make(map[string]*ChannelState),
+		PendingTransfers: make(map[string]string),
+	}
 }
 
 func LoadBotState(path string) (BotState, error) {
@@ -118,6 +125,9 @@ func LoadBotState(path string) (BotState, error) {
 	}
 	if s.Channels == nil {
 		s.Channels = make(map[string]*ChannelState)
+	}
+	if s.PendingTransfers == nil {
+		s.PendingTransfers = make(map[string]string)
 	}
 	return s, nil
 }

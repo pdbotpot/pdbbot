@@ -144,7 +144,27 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 	}
 
 	// First run for this channel: seed LastSeenID to skip backlog.
+	// Exception: if there's a pending ownership transfer for this GC, scan the
+	// backlog for the requester's first message before seeding past it.
 	if !cs.Initialized {
+		if ch.GroupChatID != "" {
+			if pendingOwner, ok := b.state.PendingTransfers[ch.GroupChatID]; ok {
+				for _, m := range allMsgs {
+					if m.SenderID == pendingOwner {
+						slog.Info("create-gc: pending owner found in backlog at seed, transferring", "gc", ch.GroupChatID, "to", m.SenderName)
+						if !b.cfg.DryRun {
+							if err := b.api.TransferGroupChat(ctx, ch.GroupChatID, pendingOwner); err != nil {
+								slog.Warn("create-gc: transfer failed", "err", err)
+							} else {
+								slog.Info("create-gc: transfer complete", "gc", ch.GroupChatID, "to", m.SenderName)
+							}
+						}
+						delete(b.state.PendingTransfers, ch.GroupChatID)
+						break
+					}
+				}
+			}
+		}
 		if len(allMsgs) > 0 {
 			cs.LastSeenID = allMsgs[len(allMsgs)-1].ID
 			cs.LastSeenAt = allMsgs[len(allMsgs)-1].CreatedAt
@@ -185,6 +205,55 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 	cs.LastSeenAt = newest.CreatedAt
 	slog.Info("new messages", "name", name, "count", len(newMsgs), "latest", fmt.Sprintf("%s: %s", newest.SenderName, newest.Text))
 
+	// Mod-locked: only scan for !akane-enable from a mod/admin; ignore everything else.
+	if cs.ModLocked {
+		for _, m := range newMsgs {
+			if m.SenderID == b.cfg.SelfUserID || m.IsEvent() {
+				continue
+			}
+			if strings.TrimSpace(strings.ToLower(m.Text)) != "!akane-enable" {
+				continue
+			}
+			if ch.GroupChatID == "" {
+				continue
+			}
+			ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+			if err != nil || !ok {
+				continue
+			}
+			cs.ModLocked = false
+			slog.Info("mod-lock lifted", "name", name, "by", m.SenderName)
+			if _, err := QuickSend(ctx, b.api, ch.ID, "i'm back.", m.ID, b.rng, b.cfg.DryRun); err != nil {
+				slog.Warn("akane-enable reply failed", "err", err)
+			}
+			break
+		}
+		if cs.ModLocked {
+			return nil
+		}
+	}
+
+	// Pending ownership transfer: fire when the requester sends their first message
+	// (which also joins them to the GC). Transfer then clear the pending entry.
+	if ch.GroupChatID != "" {
+		if pendingOwner, ok := b.state.PendingTransfers[ch.GroupChatID]; ok {
+			for _, m := range newMsgs {
+				if m.SenderID == pendingOwner {
+					slog.Info("create-gc: pending owner joined, transferring ownership", "gc", ch.GroupChatID, "to", m.SenderName)
+					if !b.cfg.DryRun {
+						if err := b.api.TransferGroupChat(ctx, ch.GroupChatID, pendingOwner); err != nil {
+							slog.Warn("create-gc: transfer failed", "err", err)
+						} else {
+							slog.Info("create-gc: transfer complete", "gc", ch.GroupChatID, "to", m.SenderName)
+						}
+					}
+					delete(b.state.PendingTransfers, ch.GroupChatID)
+					break
+				}
+			}
+		}
+	}
+
 	// Handle control commands before anything else. Command messages are
 	// stripped from newMsgs so decide() doesn't treat them as triggers.
 	cmdIDs := make(map[string]struct{})
@@ -196,10 +265,39 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 	}
 	var tdReqs []tdReq
 	for _, m := range newMsgs {
-		if m.SenderID == b.cfg.SelfUserID {
+		if m.SenderID == b.cfg.SelfUserID || m.IsEvent() {
 			continue
 		}
 		cmd := strings.TrimSpace(strings.ToLower(m.Text))
+		if cmd == "!akane-disable" {
+			cmdIDs[m.ID] = struct{}{}
+			if ch.GroupChatID == "" {
+				if _, err := QuickSend(ctx, b.api, ch.ID, "can't verify permissions (group id unknown)", m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("akane-disable reply failed", "err", err)
+				}
+				continue
+			}
+			ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+			if err != nil {
+				slog.Warn("akane-disable: admin check failed", "err", err)
+				if _, err := QuickSend(ctx, b.api, ch.ID, "error checking permissions", m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("akane-disable reply failed", "err", err)
+				}
+				continue
+			}
+			if !ok {
+				if _, err := QuickSend(ctx, b.api, ch.ID, "no permission", m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("akane-disable reply failed", "err", err)
+				}
+				continue
+			}
+			cs.ModLocked = true
+			slog.Info("mod-locked by command", "name", name, "by", m.SenderName)
+			if _, err := QuickSend(ctx, b.api, ch.ID, "going dark. only a mod can bring me back.", m.ID, b.rng, b.cfg.DryRun); err != nil {
+				slog.Warn("akane-disable reply failed", "err", err)
+			}
+			return nil
+		}
 		if cmd == "!akanestop" || cmd == "!stopakane" {
 			cmdIDs[m.ID] = struct{}{}
 			if !cs.Disabled {
@@ -239,55 +337,143 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 				}
 				continue
 			}
+			if cmd == "!auto-delete-events" {
+				cmdIDs[m.ID] = struct{}{}
+				var replyText string
+				if ch.GroupChatID == "" {
+					replyText = "can't verify permissions (group id unknown)"
+				} else {
+					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+					if err != nil {
+						slog.Warn("auto-delete-events: admin check failed", "err", err)
+						replyText = "error checking permissions"
+					} else if !ok {
+						replyText = "no permission"
+					} else {
+						cs.AutoDeleteEvents = !cs.AutoDeleteEvents
+						state := "enabled"
+						if !cs.AutoDeleteEvents {
+							state = "disabled"
+						}
+						slog.Info("auto-delete-events toggled", "name", name, "state", state, "by", m.SenderName)
+						replyText = "auto-delete system events: " + state
+					}
+				}
+				if _, err := QuickSend(ctx, b.api, ch.ID, replyText, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("auto-delete-events reply failed", "err", err)
+				}
+				continue
+			}
+			if cmd == "!purge-events" {
+				cmdIDs[m.ID] = struct{}{}
+				var replyText string
+				if ch.GroupChatID == "" {
+					replyText = "can't verify permissions (group id unknown)"
+				} else {
+					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+					if err != nil {
+						slog.Warn("purge-events: admin check failed", "err", err)
+						replyText = "error checking permissions"
+					} else if !ok {
+						replyText = "no permission"
+					} else {
+						msgs, err := b.api.ListMessages(ctx, ch.ID, "", 50)
+						if err != nil {
+							slog.Warn("purge-events: list failed", "err", err)
+							replyText = "error fetching messages"
+						} else {
+							deleted := 0
+							for _, em := range msgs {
+								if !em.IsEvent() {
+									continue
+								}
+								if b.cfg.DryRun {
+									deleted++
+									continue
+								}
+								if err := b.api.DeleteMessage(ctx, ch.GroupChatID, em.ID); err != nil {
+									slog.Warn("purge-events: delete failed", "id", em.ID, "err", err)
+								} else {
+									deleted++
+								}
+							}
+							slog.Info("purge-events done", "name", name, "deleted", deleted, "by", m.SenderName)
+							replyText = fmt.Sprintf("purged %d system event messages", deleted)
+						}
+					}
+				}
+				if _, err := QuickSend(ctx, b.api, ch.ID, replyText, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("purge-events reply failed", "err", err)
+				}
+				continue
+			}
+			if cmd == "!mods-only-chat-mode" {
+				cmdIDs[m.ID] = struct{}{}
+				var replyText string
+				if ch.GroupChatID == "" {
+					replyText = "can't verify permissions (group id unknown)"
+				} else {
+					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
+					if err != nil {
+						slog.Warn("mods-only: admin check failed", "err", err)
+						replyText = "error checking permissions"
+					} else if !ok {
+						replyText = "no permission"
+					} else {
+						cs.ModsOnly = !cs.ModsOnly
+						state := "enabled"
+						if !cs.ModsOnly {
+							state = "disabled"
+						}
+						slog.Info("mods-only toggled", "name", name, "state", state, "by", m.SenderName)
+						replyText = "mods-only chat mode: " + state
+					}
+				}
+				if _, err := QuickSend(ctx, b.api, ch.ID, replyText, m.ID, b.rng, b.cfg.DryRun); err != nil {
+					slog.Warn("mods-only reply failed", "err", err)
+				}
+				continue
+			}
 			if cmd == "!create-gc" || strings.HasPrefix(cmd, "!create-gc ") {
 				cmdIDs[m.ID] = struct{}{}
 				var replyText string
 				gcName := strings.TrimSpace(strings.TrimPrefix(m.Text, "!create-gc"))
 				if gcName == "" {
 					replyText = "usage: !create-gc <name>"
-				} else if ch.GroupChatID == "" {
-					replyText = "can't verify permissions (group id unknown)"
+				} else if b.cfg.DryRun {
+					replyText = "[dry-run] would create gc: " + gcName
 				} else {
-					ok, err := b.api.IsGroupAdmin(ctx, ch.GroupChatID, m.SenderID)
-					if err != nil {
-						slog.Warn("create-gc: admin check failed", "err", err)
-						replyText = "error checking permissions"
-					} else if !ok {
-						replyText = "no permission"
-					} else if b.cfg.DryRun {
-						replyText = "[dry-run] would create gc: " + gcName
-					} else {
-						iconToken := b.cfg.DefaultGroupChatIcon
-						if iconToken == "" {
-							iconToken = b.cachedIconToken
-						}
-						if iconToken == "" {
-							slog.Info("create-gc: uploading default icon")
-							t, err := b.api.UploadGroupChatIcon(ctx)
-							if err != nil {
-								slog.Warn("create-gc: icon upload failed", "err", err)
-							} else {
-								b.cachedIconToken = t
-								iconToken = t
-							}
-						}
-						result, err := b.api.CreateGroupChat(ctx, gcName, iconToken)
+					iconToken := b.cfg.DefaultGroupChatIcon
+					if iconToken == "" {
+						iconToken = b.cachedIconToken
+					}
+					if iconToken == "" {
+						slog.Info("create-gc: uploading default icon")
+						t, err := b.api.UploadGroupChatIcon(ctx)
 						if err != nil {
-							slog.Warn("create-gc: failed", "err", err)
-							replyText = "failed to create group chat"
+							slog.Warn("create-gc: icon upload failed", "err", err)
 						} else {
-							slog.Info("create-gc: created", "name", result.Name, "id", result.GroupChatID, "channel", result.ChannelID, "by", m.SenderName)
-							link := "https://www.personality-database.com/join_group?cid=livestream%3A" + result.ChannelID + "&id=" + result.GroupChatID + "&inviteFrom=" + b.cfg.SelfUserID
-							dmChID, err := b.api.CreateChat(ctx, m.SenderID)
-							if err != nil {
-								slog.Warn("create-gc: open dm failed", "err", err)
-								replyText = link
-							} else if _, err := b.api.SendMessage(ctx, dmChID, link, ""); err != nil {
-								slog.Warn("create-gc: dm send failed", "err", err)
-								replyText = link
-							} else {
-								replyText = "✨ " + m.SenderName + "'s group chat has been created, check your dms for the invite link ✨"
-							}
+							b.cachedIconToken = t
+							iconToken = t
+						}
+					}
+					result, err := b.api.CreateGroupChat(ctx, gcName, iconToken)
+					if err != nil {
+						slog.Warn("create-gc: failed", "err", err)
+						replyText = "failed to create group chat: " + err.Error()
+					} else {
+						slog.Info("create-gc: created", "name", result.Name, "id", result.GroupChatID, "channel", result.ChannelID, "by", m.SenderName)
+						b.state.PendingTransfers[result.GroupChatID] = m.SenderID
+						link := "https://www.personality-database.com/join_group?cid=livestream%3A" + result.ChannelID + "&id=" + result.GroupChatID + "&inviteFrom=" + b.cfg.SelfUserID
+						dmChID, err := b.api.CreateChat(ctx, m.SenderID)
+						if err != nil {
+							slog.Warn("create-gc: open dm failed", "err", err)
+							replyText = link
+						} else if _, err := b.api.SendMessage(ctx, dmChID, link, ""); err != nil {
+							slog.Warn("create-gc: dm send failed", "err", err)
+							replyText = link
+						} else {
+							replyText = "✨ " + m.SenderName + "'s group chat has been created, check your dms for the invite link ✨"
 						}
 					}
 				}
@@ -334,7 +520,7 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 	// Automod: delete group-chat invite links regardless of bot enabled/active state.
 	if cs.AutomodInvites && ch.GroupChatID != "" {
 		for _, m := range newMsgs {
-			if m.SenderID == b.cfg.SelfUserID {
+			if m.SenderID == b.cfg.SelfUserID || m.IsEvent() {
 				continue
 			}
 			if _, isCmd := cmdIDs[m.ID]; isCmd {
@@ -351,6 +537,48 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 		}
 	} else if cs.AutomodInvites && ch.GroupChatID == "" {
 		slog.Warn("automod-gc-invites enabled but GroupChatID unknown", "name", name)
+	}
+
+	if cs.AutoDeleteEvents && ch.GroupChatID != "" {
+		for _, m := range newMsgs {
+			if !m.IsEvent() {
+				continue
+			}
+			slog.Info("hide-events: deleting event message", "name", name, "msg", m.ID)
+			if !b.cfg.DryRun {
+				if err := b.api.DeleteMessage(ctx, ch.GroupChatID, m.ID); err != nil {
+					slog.Warn("hide-events: delete failed", "err", err)
+				}
+			}
+		}
+	} else if cs.AutoDeleteEvents && ch.GroupChatID == "" {
+		slog.Warn("hide-events enabled but GroupChatID unknown", "name", name)
+	}
+
+	if cs.ModsOnly && ch.GroupChatID != "" {
+		adminIDs, err := b.api.GetAdminIDs(ctx, ch.GroupChatID)
+		if err != nil {
+			slog.Warn("mods-only: failed to fetch admin IDs", "name", name, "err", err)
+		} else {
+			for _, m := range newMsgs {
+				if m.SenderID == b.cfg.SelfUserID || m.IsEvent() {
+					continue
+				}
+				if _, isCmd := cmdIDs[m.ID]; isCmd {
+					continue
+				}
+				if !adminIDs[m.SenderID] {
+					slog.Info("mods-only: deleting non-mod message", "name", name, "from", m.SenderName, "msg", m.ID)
+					if !b.cfg.DryRun {
+						if err := b.api.DeleteMessage(ctx, ch.GroupChatID, m.ID); err != nil {
+							slog.Warn("mods-only: delete failed", "err", err)
+						}
+					}
+				}
+			}
+		}
+	} else if cs.ModsOnly && ch.GroupChatID == "" {
+		slog.Warn("mods-only enabled but GroupChatID unknown", "name", name)
 	}
 
 	if cs.Disabled || !active {

@@ -27,15 +27,18 @@ func (c Channel) IsGroup() bool { return c.Type == "group_chat" }
 
 // Message is a single chat message.
 type Message struct {
-	ID               string
-	ChannelID        string
-	SenderID         string
-	SenderName       string
-	Text             string
-	CreatedAt        time.Time
-	ReplyToID        string // non-empty if this is a reply to another message
-	ReplyToSenderID  string // sender of the replied-to message (from wire data directly)
+	ID              string
+	ChannelID       string
+	MessageType     string // "regular", "event", etc.
+	SenderID        string
+	SenderName      string
+	Text            string
+	CreatedAt       time.Time
+	ReplyToID       string
+	ReplyToSenderID string
 }
+
+func (m Message) IsEvent() bool { return m.MessageType != "" && m.MessageType != "regular" }
 
 // Client wraps token.Manager with PDB chat API methods.
 type Client struct {
@@ -196,6 +199,45 @@ func (c *Client) SendMessage(ctx context.Context, channelID, text, replyToID str
 	return out.Data.ID, nil
 }
 
+// GetAdminIDs returns the set of user IDs with role "admin" or "mod" in groupChatID.
+func (c *Client) GetAdminIDs(ctx context.Context, groupChatID string) (map[string]bool, error) {
+	req, err := token.NewAPIRequest(ctx, "GET", "/group_chats/"+groupChatID, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.mgr.Do(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("group_chats/%s: status %d: %s", groupChatID, resp.StatusCode, raw)
+	}
+	var out struct {
+		Data struct {
+			GroupChat struct {
+				Members []struct {
+					User struct {
+						ID string `json:"id"`
+					} `json:"user"`
+					Role string `json:"role"`
+				} `json:"members"`
+			} `json:"groupChat"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("group_chats decode: %w", err)
+	}
+	ids := make(map[string]bool)
+	for _, m := range out.Data.GroupChat.Members {
+		if m.Role == "admin" || m.Role == "mod" {
+			ids[m.User.ID] = true
+		}
+	}
+	return ids, nil
+}
+
 // IsGroupAdmin returns true if userID has role "admin" or "mod" in the group chat.
 func (c *Client) IsGroupAdmin(ctx context.Context, groupChatID, userID string) (bool, error) {
 	req, err := token.NewAPIRequest(ctx, "GET", "/group_chats/"+groupChatID, nil)
@@ -283,6 +325,12 @@ func (c *Client) CreateGroupChat(ctx context.Context, name, iconToken string) (C
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
+		var apiErr struct {
+			Error struct{ Message string `json:"message"` } `json:"error"`
+		}
+		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Error.Message != "" {
+			return CreateGroupChatResult{}, fmt.Errorf("%s", apiErr.Error.Message)
+		}
 		return CreateGroupChatResult{}, fmt.Errorf("create group_chat: status %d: %s", resp.StatusCode, raw)
 	}
 	var out struct {
@@ -338,6 +386,25 @@ func (c *Client) CreateChat(ctx context.Context, targetUserID string) (string, e
 	return "", fmt.Errorf("chats/create: no channel ID in response: %s", raw)
 }
 
+// TransferGroupChat transfers ownership of a group chat to targetUserID.
+func (c *Client) TransferGroupChat(ctx context.Context, groupChatID, targetUserID string) error {
+	payload, _ := json.Marshal(map[string]string{"userID": targetUserID})
+	req, err := token.NewAPIRequest(ctx, "POST", "/group_chats/"+groupChatID+"/transfer", payload)
+	if err != nil {
+		return err
+	}
+	resp, err := c.mgr.Do(ctx, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("transfer group_chat: status %d: %s", resp.StatusCode, raw)
+	}
+	return nil
+}
+
 // StartTyping sends a typing-started event.
 func (c *Client) StartTyping(ctx context.Context, channelID string) error {
 	return c.typingEvent(ctx, "/im/events/start_typing", channelID)
@@ -365,9 +432,10 @@ func (c *Client) typingEvent(ctx context.Context, path, channelID string) error 
 // --- wire types (match the live API response exactly) ---
 
 type wireMessage struct {
-	ID        string `json:"id"`
-	ChannelID string `json:"channelID"`
-	Creator   struct {
+	ID          string `json:"id"`
+	ChannelID   string `json:"channelID"`
+	MessageType string `json:"messageType"`
+	Creator     struct {
 		ID       string `json:"id"`
 		Username string `json:"username"`
 	} `json:"creator"`
@@ -378,12 +446,13 @@ type wireMessage struct {
 
 func wireToMessage(w wireMessage) Message {
 	m := Message{
-		ID:         w.ID,
-		ChannelID:  w.ChannelID,
-		SenderID:   w.Creator.ID,
-		SenderName: w.Creator.Username,
-		Text:       w.Text,
-		CreatedAt:  time.UnixMilli(w.CreateDate),
+		ID:          w.ID,
+		ChannelID:   w.ChannelID,
+		MessageType: w.MessageType,
+		SenderID:    w.Creator.ID,
+		SenderName:  w.Creator.Username,
+		Text:        w.Text,
+		CreatedAt:   time.UnixMilli(w.CreateDate),
 	}
 	if w.ReplyTo != nil {
 		m.ReplyToID = w.ReplyTo.ID
