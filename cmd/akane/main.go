@@ -22,6 +22,7 @@ func main() {
 	cfgPath := flag.String("config", "config.json", "config file")
 	botStatePath := flag.String("bot-state", "akane_state.json", "bot state file")
 	provider := flag.String("provider", "groq", "LLM provider (groq, openai)")
+	model := flag.String("model", "", "override LLM model (default: from config)")
 	keysDir := flag.String("keys-dir", "keys", "directory containing <provider>.key files")
 	flag.Parse()
 
@@ -35,6 +36,9 @@ func main() {
 	if !ok {
 		slog.Error("unknown provider", "provider", *provider, "available", fmt.Sprintf("%v", cfg.Providers))
 		os.Exit(1)
+	}
+	if *model != "" {
+		providerCfg.Model = *model
 	}
 
 	keyFile := filepath.Join(*keysDir, *provider+".key")
