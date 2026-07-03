@@ -132,7 +132,12 @@ func (c *Client) Reply(ctx context.Context, systemPrompt string, history []Msg) 
 		if len(out.Choices) == 0 || out.Choices[0].Message.Content == "" {
 			return Silence, nil
 		}
-		return strings.TrimSpace(out.Choices[0].Message.Content), nil
+		text := strings.TrimSpace(out.Choices[0].Message.Content)
+		// Some models prefix replies with "Name: " — strip it.
+		if idx := strings.Index(text, ": "); idx > 0 && idx < 20 {
+			text = strings.TrimSpace(text[idx+2:])
+		}
+		return text, nil
 	}
 	return "", lastErr
 }
