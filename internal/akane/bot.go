@@ -625,6 +625,17 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 		newMsgs = filtered
 	}
 
+	// Fetch admin IDs once if any mode that needs them is active.
+	var adminIDs map[string]bool
+	if ch.GroupChatID != "" && (cs.AutomodInvites || cs.GCLinksOnly || cs.ModsOnly || cs.NoDuplicates || cs.AntiFlood) {
+		ids, err := b.api.GetAdminIDs(ctx, ch.GroupChatID)
+		if err != nil {
+			slog.Warn("failed to fetch admin IDs", "name", name, "err", err)
+		} else {
+			adminIDs = ids
+		}
+	}
+
 	// Automod: delete group-chat invite links regardless of bot enabled/active state.
 	if cs.AutomodInvites && ch.GroupChatID != "" {
 		for _, m := range newMsgs {
@@ -632,6 +643,9 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 				continue
 			}
 			if _, isCmd := cmdIDs[m.ID]; isCmd {
+				continue
+			}
+			if adminIDs[m.SenderID] {
 				continue
 			}
 			if containsGCInviteLink(m.Text) {
@@ -645,17 +659,6 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 		}
 	} else if cs.AutomodInvites && ch.GroupChatID == "" {
 		slog.Warn("automod-gc-invites enabled but GroupChatID unknown", "name", name)
-	}
-
-	// Fetch admin IDs once if any mode that needs them is active.
-	var adminIDs map[string]bool
-	if ch.GroupChatID != "" && (cs.GCLinksOnly || cs.ModsOnly || cs.NoDuplicates || cs.AntiFlood) {
-		ids, err := b.api.GetAdminIDs(ctx, ch.GroupChatID)
-		if err != nil {
-			slog.Warn("failed to fetch admin IDs", "name", name, "err", err)
-		} else {
-			adminIDs = ids
-		}
 	}
 
 	if cs.GCLinksOnly && ch.GroupChatID != "" {
@@ -837,7 +840,7 @@ func (b *Bot) processChannel(ctx context.Context, ch pdbapi.Channel, now time.Ti
 		}
 	}
 
-	if cs.Disabled || cs.ModLocked || !active {
+	if cs.Disabled || cs.ModLocked || !active || !b.cfg.EnableAI {
 		return nil
 	}
 

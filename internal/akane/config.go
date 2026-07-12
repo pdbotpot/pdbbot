@@ -36,6 +36,7 @@ type Config struct {
 	ActiveHours                  ActiveHours            `json:"active_hours"`
 	Providers                    map[string]LLMConfig   `json:"providers"`
 	DryRun                       bool                   `json:"dry_run"`
+	EnableAI                     bool                   `json:"enable_ai"` // enable LLM replies; default true
 	SelfUserID                   string      `json:"self_user_id"`
 	DefaultGroupChatIcon         string      `json:"default_group_chat_icon"`
 	PromptFile                   string      `json:"prompt_file"` // path to persona prompt; defaults to "prompt.txt"
@@ -43,6 +44,7 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
+		EnableAI: true,
 		PollIntervalSec:             15,
 		TriggerNames:                []string{"akane"},
 		AmbientProb:                 0.10,
